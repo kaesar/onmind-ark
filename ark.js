@@ -1,28 +1,47 @@
 // Script for database backup and rotation
-// Usage: node backup.js <dbPath> <backupDir>
-// Example: node backup.js /path/to/xy.db /opt/backup
-// Dependencies: npm install archiver date-fns
-// Schedule with cron: 55 23 * * * /usr/bin/node /path/to/backup.js /path/to/xy.db /opt/backup
+// Usage: node ark.js <dbPath> <backupDir>
+// Example: node ark.js /path/to/xy.db /opt/backup
+// Dependencies: npm install adm-zip
+// bun build --compile --target=bun-linux-x64 ./ark.js --outfile ark
+// Schedule with cron: 55 23 * * * /usr/bin/node /path/to/ark.js /path/to/xy.db /opt/backup
 
 const fs = require('fs/promises');
 const path = require('path');
-const archiver = require('archiver');
-const { 
-  format, 
-  parse, 
-  subDays, 
-  startOfMonth, 
-  endOfWeek, 
-  isSameMonth, 
-  addMonths, 
-  endOfMonth, 
-  isSameYear, 
-  endOfYear 
-} = require('date-fns');
+const AdmZip = require('adm-zip');
+
+const DEBUG = process.env.DEBUG === '1';
+const log = (...args) => DEBUG && console.log(...args);
+
+const format = (date) => {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}${m}${d}`;
+};
+
+const parse = (str) => {
+  const y = parseInt(str.slice(0, 4));
+  const m = parseInt(str.slice(4, 6)) - 1;
+  const d = parseInt(str.slice(6, 8));
+  return new Date(y, m, d);
+};
+
+const subDays = (date, days) => new Date(date.getTime() - days * 86400000);
+//const addMonths = (date, months) => new Date(date.getFullYear(), date.getMonth() + months, date.getDate());
+const startOfMonth = (date) => new Date(date.getFullYear(), date.getMonth(), 1);
+const endOfMonth = (date) => new Date(date.getFullYear(), date.getMonth() + 1, 0);
+const endOfYear = (date) => new Date(date.getFullYear(), 11, 31);
+const isSameMonth = (d1, d2) => d1.getFullYear() === d2.getFullYear() && d1.getMonth() === d2.getMonth();
+//const isSameYear = (d1, d2) => d1.getFullYear() === d2.getFullYear();
+const endOfWeek = (date) => {
+  const day = date.getDay();
+  const diff = day === 0 ? 0 : 7 - day;
+  return new Date(date.getTime() + diff * 86400000);
+};
 
 async function createBackup(dbPath, backupDir) {
   const now = new Date();
-  const filename = `export${format(now, 'yyyyMMdd')}.zip`;
+  const filename = `export${format(now)}.zip`;
   const outputPath = path.join(backupDir, filename);
 
   // Check if today's backup already exists; skip if it does
@@ -35,74 +54,74 @@ async function createBackup(dbPath, backupDir) {
   }
 
   const startTime = performance.now();
-  const output = require('fs').createWriteStream(outputPath);
-  const archive = archiver('zip', { zlib: { level: 9 } });
-
-  return new Promise((resolve, reject) => {
-    archive.on('error', reject);
-    output.on('close', () => {
-      const elapsed = ((performance.now() - startTime) / 1000).toFixed(3);
-      console.log(`Created backup: ${filename} ( ${elapsed}s )`);
-      resolve();
-    });
-
-    archive.pipe(output);
-    archive.file(dbPath, { name: path.basename(dbPath) });
-    archive.finalize();
-  });
+  const zip = new AdmZip();
+  zip.addLocalFile(dbPath);
+  zip.writeZip(outputPath);
+  const elapsed = ((performance.now() - startTime) / 1000).toFixed(3);
+  console.log(`Created backup: ${filename} (${elapsed}s)`);
 }
 
 async function rotateBackups(backupDir) {
+  log('[DEBUG] Starting rotateBackups');
   const now = new Date();
   const files = await fs.readdir(backupDir);
+  log('[DEBUG] Files read:', files.length);
   const backupFiles = files.filter(f => f.startsWith('export') && f.endsWith('.zip'));
+  log('[DEBUG] Backup files found:', backupFiles.length);
 
   const backups = backupFiles.map(f => {
     const dateStr = f.slice(6, -4); // exportYYYYMMdd.zip -> YYYYMMdd
-    const date = parse(dateStr, 'yyyyMMdd', new Date());
+    const date = parse(dateStr);
     return { file: f, date, year: date.getFullYear() };
   }).filter(b => !isNaN(b.date.getTime()));
 
   const toKeep = new Set();
 
-  // Options for week: start on Monday, end on Sunday
-  const weekOptions = { weekStartsOn: 1 };
-
   // Keep daily for last 7 days (today - 6 days)
+  log('[DEBUG] Processing daily backups');
   for (let i = 0; i < 7; i++) {
     const d = subDays(now, i);
-    const key = `export${format(d, 'yyyyMMdd')}.zip`;
+    const key = `export${format(d)}.zip`;
     toKeep.add(key);
   }
+  log('[DEBUG] Daily backups processed');
 
   // Keep weekly (end of week: Sunday) for earlier in current month
+  log('[DEBUG] Processing weekly backups');
   const currentMonthStart = startOfMonth(now);
-  let weekEndDate = endOfWeek(subDays(now, 7), weekOptions); // End of previous week
-  while (isSameMonth(weekEndDate, now) && weekEndDate >= currentMonthStart) {
-    const key = `export${format(weekEndDate, 'yyyyMMdd')}.zip`;
+  let weekEndDate = endOfWeek(subDays(now, 7));
+  let weekCount = 0;
+  while (isSameMonth(weekEndDate, now) && weekEndDate >= currentMonthStart && weekCount < 10) {
+    const key = `export${format(weekEndDate)}.zip`;
     toKeep.add(key);
-    weekEndDate = endOfWeek(subDays(weekEndDate, 7), weekOptions);
+    weekEndDate = endOfWeek(subDays(weekEndDate, 7));
+    weekCount++;
   }
+  log('[DEBUG] Weekly backups processed');
 
   // Keep monthly (last day of month) for previous months in current year
-  let prevMonthEnd = endOfMonth(addMonths(now, -1));
-  while (isSameYear(prevMonthEnd, now) && prevMonthEnd < startOfMonth(now)) {
-    const key = `export${format(prevMonthEnd, 'yyyyMMdd')}.zip`;
+  log('[DEBUG] Processing monthly backups');
+  for (let m = 1; m < now.getMonth() + 1; m++) {
+    const prevMonthEnd = endOfMonth(new Date(now.getFullYear(), now.getMonth() - m, 1));
+    const key = `export${format(prevMonthEnd)}.zip`;
     toKeep.add(key);
-    prevMonthEnd = endOfMonth(addMonths(prevMonthEnd, -1));
   }
+  log('[DEBUG] Monthly backups processed');
 
   // Keep yearly (Dec 31) for previous years, based on existing backups
+  log('[DEBUG] Processing yearly backups');
   if (backups.length > 0) {
     const minYear = Math.min(...backups.map(b => b.year));
     for (let y = minYear; y < now.getFullYear(); y++) {
       const yearEnd = endOfYear(new Date(y, 0, 1));
-      const key = `export${format(yearEnd, 'yyyyMMdd')}.zip`;
+      const key = `export${format(yearEnd)}.zip`;
       toKeep.add(key);
     }
   }
+  log('[DEBUG] Yearly backups processed');
 
   // Delete files not in toKeep
+  log('[DEBUG] Processing deletions');
   for (const { file } of backups) {
     if (!toKeep.has(file)) {
       const filePath = path.join(backupDir, file);
@@ -110,6 +129,7 @@ async function rotateBackups(backupDir) {
       console.log(`Deleted old backup: ${file}`);
     }
   }
+  log('[DEBUG] rotateBackups completed');
 }
 
 async function main() {
@@ -117,7 +137,7 @@ async function main() {
   const backupDir = process.argv[3];
 
   if (!dbPath || !backupDir) {
-    console.error('Usage: node backup.js <dbPath> <backupDir>');
+    console.error('Usage: node ark.js <dbPath> <backupDir>');
     process.exit(1);
   }
 
@@ -126,6 +146,7 @@ async function main() {
     await createBackup(dbPath, backupDir);
     await rotateBackups(backupDir);
     console.log('Backup and rotation completed.');
+    process.exit(0);
   } catch (error) {
     console.error('Error:', error);
     process.exit(1);
