@@ -1,14 +1,16 @@
-// Script for database backup and rotation
-// Usage: node ark.js <dbPath> <backupDir>
-// Example: node ark.js /path/to/xy.db /opt/backup
-// Dependencies: npm install adm-zip
-// bun build --compile --target=bun-linux-x64 ./ark.js --outfile ark
-// Schedule with cron: 55 23 * * * /usr/bin/node /path/to/ark.js /path/to/xy.db /opt/backup
+// Script for database backup and rotation (using native zip command)
+// Usage: node ark-native.js <dbPath> <backupDir>
+// Example: node ark-native.js /path/to/xy.db /opt/backup
+// Dependencies: none (uses system zip command)
+// bun build --compile --target=bun-linux-x64 ./ark-native.js --outfile ark
+// Schedule with cron: 55 23 * * * /usr/bin/node /path/to/ark-native.js /path/to/xy.db /opt/backup
 
 const fs = require('fs/promises');
 const path = require('path');
-const AdmZip = require('adm-zip');
+const { execFile } = require('child_process');
+const { promisify } = require('util');
 
+const execFileAsync = promisify(execFile);
 const DEBUG = process.env.DEBUG === '1';
 const log = (...args) => DEBUG && console.log(...args);
 
@@ -52,9 +54,13 @@ async function createBackup(dbPath, backupDir) {
   }
 
   const startTime = performance.now();
-  const zip = new AdmZip();
-  zip.addLocalFile(dbPath);
-  zip.writeZip(outputPath);
+  const absOutputPath = path.resolve(outputPath);
+  const absDbPath = path.resolve(dbPath);
+  
+  // Use native zip command: zip -9 -j output.zip input.file
+  // -9: maximum compression, -j: junk paths (store just filename)
+  await execFileAsync('zip', ['-9', '-j', absOutputPath, absDbPath]);
+  
   const elapsed = ((performance.now() - startTime) / 1000).toFixed(3);
   console.log(`Created backup: ${filename} (${elapsed}s)`);
 }
@@ -68,14 +74,13 @@ async function rotateBackups(backupDir) {
   log('[DEBUG] Backup files found:', backupFiles.length);
 
   const backups = backupFiles.map(f => {
-    const dateStr = f.slice(6, -4); // exportYYYYMMdd.zip -> YYYYMMdd
+    const dateStr = f.slice(6, -4);
     const date = parse(dateStr);
     return { file: f, date, year: date.getFullYear() };
   }).filter(b => !isNaN(b.date.getTime()));
 
   const toKeep = new Set();
 
-  // Keep daily for last 7 days (today - 6 days)
   log('[DEBUG] Processing daily backups');
   for (let i = 0; i < 7; i++) {
     const d = subDays(now, i);
@@ -84,7 +89,6 @@ async function rotateBackups(backupDir) {
   }
   log('[DEBUG] Daily backups processed');
 
-  // Keep weekly (end of week: Sunday) for earlier in current month
   log('[DEBUG] Processing weekly backups');
   const currentMonthStart = startOfMonth(now);
   let weekEndDate = endOfWeek(subDays(now, 7));
@@ -97,7 +101,6 @@ async function rotateBackups(backupDir) {
   }
   log('[DEBUG] Weekly backups processed');
 
-  // Keep monthly (last day of month) for previous months in current year
   log('[DEBUG] Processing monthly backups');
   for (let m = 1; m < now.getMonth() + 1; m++) {
     const prevMonthEnd = endOfMonth(new Date(now.getFullYear(), now.getMonth() - m, 1));
@@ -106,7 +109,6 @@ async function rotateBackups(backupDir) {
   }
   log('[DEBUG] Monthly backups processed');
 
-  // Keep yearly (Dec 31) for previous years, based on existing backups
   log('[DEBUG] Processing yearly backups');
   if (backups.length > 0) {
     const minYear = Math.min(...backups.map(b => b.year));
@@ -118,7 +120,6 @@ async function rotateBackups(backupDir) {
   }
   log('[DEBUG] Yearly backups processed');
 
-  // Delete files not in toKeep
   log('[DEBUG] Processing deletions');
   for (const { file } of backups) {
     if (!toKeep.has(file)) {
@@ -135,7 +136,7 @@ async function main() {
   const backupDir = process.argv[3];
 
   if (!dbPath || !backupDir) {
-    console.error('Usage: node ark.js <dbPath> <backupDir>');
+    console.error('Usage: node ark-native.js <dbPath> <backupDir>');
     process.exit(1);
   }
 
