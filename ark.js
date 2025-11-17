@@ -1,9 +1,10 @@
 // Script for database backup and rotation
-// Usage: node ark.js <dbPath> <backupDir>
+// Usage: node ark.js <filePaths> <backupDir>
 // Example: node ark.js /path/to/xy.db /opt/backup
+// Example: node ark.js /path/to/xy.db,/path/to/xy.sql /opt/backup
 // Dependencies: npm install adm-zip
 // bun build --compile --target=bun-linux-x64 ./ark.js --outfile ark
-// Schedule with cron: 55 23 * * * /usr/bin/node /path/to/ark.js /path/to/xy.db /opt/backup
+// Schedule with cron: 55 23 * * * /usr/bin/node /path/to/ark.js /path/to/xy.db,/path/to/xy.sql /opt/backup
 
 const fs = require('fs/promises');
 const path = require('path');
@@ -37,7 +38,7 @@ const endOfWeek = (date) => {
   return new Date(date.getTime() + diff * 86400000);
 };
 
-async function createBackup(dbPath, backupDir) {
+async function createBackup(filePaths, backupDir) {
   const now = new Date();
   const filename = `export${format(now)}.zip`;
   const outputPath = path.join(backupDir, filename);
@@ -53,7 +54,7 @@ async function createBackup(dbPath, backupDir) {
 
   const startTime = performance.now();
   const zip = new AdmZip();
-  zip.addLocalFile(dbPath);
+  filePaths.forEach(filePath => zip.addLocalFile(filePath));
   zip.writeZip(outputPath);
   const elapsed = ((performance.now() - startTime) / 1000).toFixed(3);
   console.log(`Created backup: ${filename} (${elapsed}s)`);
@@ -131,17 +132,21 @@ async function rotateBackups(backupDir) {
 }
 
 async function main() {
-  const dbPath = process.argv[2];
+  const filePathsArg = process.argv[2];
   const backupDir = process.argv[3];
 
-  if (!dbPath || !backupDir) {
-    console.error('Usage: node ark.js <dbPath> <backupDir>');
+  if (!filePathsArg || !backupDir) {
+    console.error('Usage: node ark.js <filePath1[,filePath2,...]> <backupDir>');
+    console.error('Example: node ark.js /path/to/xy.db /opt/backup');
+    console.error('Example: node ark.js /path/to/xy.db,/path/to/xy.sql /opt/backup');
     process.exit(1);
   }
 
+  const filePaths = filePathsArg.split(',').map(f => f.trim());
+
   try {
     await fs.mkdir(backupDir, { recursive: true });
-    await createBackup(dbPath, backupDir);
+    await createBackup(filePaths, backupDir);
     await rotateBackups(backupDir);
     console.log('Backup and rotation completed.');
     process.exit(0);

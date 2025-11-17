@@ -1,9 +1,9 @@
 // Script for database backup and rotation (using native zip command)
-// Usage: node ark-native.js <dbPath> <backupDir>
-// Example: node ark-native.js /path/to/xy.db /opt/backup
+// Usage: node ark-zip.js <filePaths> <backupDir>
+// Example: node ark-zip.js /path/to/xy.db /opt/backup
+// Example: node ark-zip.js /path/to/xy.db,/path/to/xy.sql /opt/backup
 // Dependencies: none (uses system zip command)
-// bun build --compile --target=bun-linux-x64 ./ark-native.js --outfile ark
-// Schedule with cron: 55 23 * * * /usr/bin/node /path/to/ark-native.js /path/to/xy.db /opt/backup
+// Schedule with cron: 55 23 * * * /usr/bin/node /path/to/ark-zip.js /path/to/xy.db,/path/to/xy.sql /opt/backup
 
 const fs = require('fs/promises');
 const path = require('path');
@@ -39,7 +39,7 @@ const endOfWeek = (date) => {
   return new Date(date.getTime() + diff * 86400000);
 };
 
-async function createBackup(dbPath, backupDir) {
+async function createBackup(filePaths, backupDir) {
   const now = new Date();
   const filename = `export${format(now)}.zip`;
   const outputPath = path.join(backupDir, filename);
@@ -55,11 +55,11 @@ async function createBackup(dbPath, backupDir) {
 
   const startTime = performance.now();
   const absOutputPath = path.resolve(outputPath);
-  const absDbPath = path.resolve(dbPath);
+  const absFilePaths = filePaths.map(f => path.resolve(f));
   
-  // Use native zip command: zip -9 -j output.zip input.file
+  // Use native zip command: zip -9 -j output.zip input1.file input2.file ...
   // -9: maximum compression, -j: junk paths (store just filename)
-  await execFileAsync('zip', ['-9', '-j', absOutputPath, absDbPath]);
+  await execFileAsync('zip', ['-9', '-j', absOutputPath, ...absFilePaths]);
   
   const elapsed = ((performance.now() - startTime) / 1000).toFixed(3);
   console.log(`Created backup: ${filename} (${elapsed}s)`);
@@ -132,17 +132,21 @@ async function rotateBackups(backupDir) {
 }
 
 async function main() {
-  const dbPath = process.argv[2];
+  const filePathsArg = process.argv[2];
   const backupDir = process.argv[3];
 
-  if (!dbPath || !backupDir) {
-    console.error('Usage: node ark-native.js <dbPath> <backupDir>');
+  if (!filePathsArg || !backupDir) {
+    console.error('Usage: node ark-zip.js <filePath1[,filePath2,...]> <backupDir>');
+    console.error('Example: node ark-zip.js /path/to/xy.db /opt/backup');
+    console.error('Example: node ark-zip.js /path/to/xy.db,/path/to/xy.sql /opt/backup');
     process.exit(1);
   }
 
+  const filePaths = filePathsArg.split(',').map(f => f.trim());
+
   try {
     await fs.mkdir(backupDir, { recursive: true });
-    await createBackup(dbPath, backupDir);
+    await createBackup(filePaths, backupDir);
     await rotateBackups(backupDir);
     console.log('Backup and rotation completed.');
     process.exit(0);
