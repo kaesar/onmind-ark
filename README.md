@@ -2,7 +2,7 @@
 
 > Rotative backup script with daily, weekly, monthly, and yearly retention.
 
-This is a rotative backup script created for [**OnMind-XDB**](https://github.com/kaesar/onmind-xdb) (eXpress Database) and it's useful for others projects. It compresses specified files into zip archives and organizes them with a retention policy that includes daily, weekly, monthly, and yearly backups. The script is designed to be run via command line and scheduled with cron for automated backups (for Linux and macOS).
+This is a rotative backup script created for [**OnMind-XDB**](https://github.com/kaesar/onmind-xdb) (eXpress Database by Cesar Andres A.) and it's useful for others projects. It compresses specified files into zip archives and organizes them with a retention policy that includes daily, weekly, monthly, and yearly backups. The script is designed to be run via command line and scheduled with cron for automated backups (for Linux and macOS).
 
 ## Install dependencies
 
@@ -75,3 +75,5 @@ crontab -e
 ## About ark-zip.js
 
 `ark-zip.js` is the alternative to `ark.js` without dependencies and thinked to use the `zip` command invoked with shell from the script (for Linux and macOS). With this it's not necesary to compile the script, just used directly with the system.
+
+> As an additional alternative you can found `Ark.java` for **JVM** (cross-platform, e.g. Windows, Linux, macOS).
